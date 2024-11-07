@@ -83,7 +83,7 @@ class FullyConnectedNet(object):
                 else:
                     self.params["W" + str(i)] = np.random.normal(0, weight_scale, size=(hidden_dims[i-2], hidden_dims[i-1]))
                 self.params["b"+ str(i)]=np.zeros(shape=(1,hidden_dims[i-1]))
-                if self.normalization=="batchnorm":
+                if self.normalization=="batchnorm" or self.normalization=="layernorm":
                     self.params["gama"+ str(i)]=np.ones(shape=(1,hidden_dims[i-1]))
                     self.params["beta"+ str(i)] = np.zeros(shape=(1,hidden_dims[i-1]))
             else:
@@ -171,11 +171,12 @@ class FullyConnectedNet(object):
         tempInputList=[]
         maskList=[]
         BeforeReluList=[]
+        cacheList=[]
         for i in range(1,self.num_layers+1): #对每一层
             tempInputList.append(tempInput)
             tempInput=tempInput.dot(self.params["W"+str(i)])
             tempInput+=self.params["b"+str(i)]
-            if i==self.num_layers:
+            if i==self.num_layers:#最后一层，进行softmax，不再进行其他操作
                 temp_max=np.max(tempInput,axis=1).reshape(tempInput.shape[0],1)
                 out_reduce=tempInput-temp_max
                 out_e=np.exp(out_reduce)
@@ -185,16 +186,44 @@ class FullyConnectedNet(object):
 
             if self.normalization=="batchnorm":
                 if mode=="train":
-                    temp_mean=np.mean(tempInput,axis=0)
-                    temp_var=np.var(tempInput,axis=0)+ 1e-5
-                    tempInput=self.params["gama"+str(i)]*((tempInput-temp_mean)/temp_var)+self.params["beta"+str(i)]
+                    D=tempInput.shape[1]
+                    if "running_mean" not in self.bn_params[i-1]:
+                        self.bn_params[i-1]["running_mean"] = np.zeros(D)
+                    running_mean = self.bn_params[i-1]["running_mean"]
+                    if "running_var" not in self.bn_params[i-1]:
+                        self.bn_params[i-1]["running_var"] = np.zeros(D)
+                    running_var = self.bn_params[i-1]["running_var"]
+                    momentum = self.bn_params[i-1].get("momentum", 0.9)
+                    eps = self.bn_params[i-1].get("eps", 1e-5)
+                    sample_mean=np.mean(tempInput,axis=0)
+                    sample_var=np.var(tempInput,axis=0)
+                    running_mean = momentum * running_mean + (1 - momentum) * sample_mean
+                    running_var = momentum * running_var + (1 - momentum) * sample_var
+                    self.bn_params[i-1]["running_mean"]=running_mean
+                    self.bn_params[i-1]["running_var"]=running_var
+                    x_norm=(tempInput-sample_mean)/np.sqrt(sample_var+eps)
+                    out=self.params["gama"+str(i)]*x_norm+self.params["beta"+str(i)]
+                    cacheList.append((tempInput, sample_mean, sample_var, x_norm, self.params["gama" + str(i)],
+                                      self.params["beta" + str(i)], eps))
+                    tempInput=np.copy(out)
+                if mode=="test":
+                    running_mean = self.bn_params[i-1]["running_mean"]
+                    running_var = self.bn_params[i-1]["running_var"]
+                    eps = self.bn_params[i - 1].get("eps", 1e-5)
+                    x_norm = (tempInput - running_mean) / np.sqrt(running_var + eps)
+                    tempInput = self.params["gama"+str(i)] * x_norm + self.params["beta"+str(i)]
 
-                #if mode=="test":
+
+
             elif self.normalization=="layernorm":
-                if mode=="train":
-                    temp_mean=np.mean(tempInput,axis=1)
-                    temp_var=np.var(tempInput,axis=1)+1e-5;
-                    tempInput=self.params["gama"+str(i)]*((tempInput-temp_mean)/temp_var)+self.params["beta"+str(i)]
+                eps = self.bn_params[i - 1].get("eps", 1e-5)
+                sample_mean = np.mean(tempInput, axis=1).reshape(-1,1)
+                sample_var = np.var(tempInput, axis=1).reshape(-1,1)
+                x_norm=(tempInput-sample_mean)/np.sqrt(sample_var+eps)
+                out=self.params["gama"+str(i)]*x_norm+self.params["beta"+str(i)]
+                cacheList.append((tempInput,sample_mean,sample_var,x_norm,self.params["gama"+str(i)],
+                                  self.params["beta"+str(i)],eps))
+                tempInput=np.copy(out)
             BeforeReluList.append(tempInput)
             # relu
             tempInput[tempInput<0]=0
@@ -245,7 +274,7 @@ class FullyConnectedNet(object):
         for i in range(self.num_layers-1,0,-1):
             dRelu=None #(n,hd)
             if self.use_dropout:
-                mask=maskList[i];
+                mask=maskList[i-1];
                 dRelu=dbefore*mask; #(n,hd)
             else:
                 dRelu=dbefore
@@ -256,10 +285,39 @@ class FullyConnectedNet(object):
             dnorm=dRelu*ReluMask#(n,hd)
 
             if self.normalization=="batchnorm":
-                 #(n,hd)
-                grads["beta"+str(i)]=np.sum(dnorm,axis=0)/dnorm.shape[0]
-                grads["gama"+str(i)]=dnorm*normValue
-                dz=dnorm*self.params["gama"+str(i)]
+                #(n,hd)
+                bx, sample_mean, sample_var, x_norm, gamma, beta, eps=cacheList[i-1]
+
+                bnum=bx.shape[0]
+                dbeta=np.mean(dnorm,axis=0)
+                grads["beta"+str(i)]=dbeta
+                dgama=(dnorm*x_norm).mean(axis=0)
+                grads["gama"+str(i)]=dgama
+                dz=dnorm*gamma #nd
+
+                dvar=((bx-sample_mean)*(sample_var+eps)**(-1.5)*(-0.5)*dz).sum(axis=0)
+                dvardmean=(-2*(bx-sample_mean)/bnum).sum(axis=0)
+                dvardx=2*(bx-sample_mean)/bnum
+                dmean=(-dz*(sample_var+eps)**(-0.5)).sum(axis=0)+(dvar*dvardmean).sum(axis=0)
+                dmeandx=1/bnum
+                tdx=(dz/np.sqrt(sample_var+eps))+dmean*dmeandx+dvar*dvardx
+                dz=tdx
+            elif self.normalization=="layernorm":
+                bx, sample_mean, sample_var, x_norm, gamma,beta, eps = cacheList[i - 1]
+                bnum = bx.shape[1]
+                dbeta=np.mean(dnorm,axis=0)
+                dgamma=(dnorm*x_norm).mean(axis=0)
+                grads["beta"+str(i)]=dbeta
+                grads["gama"+str(i)]=dgamma
+                dz=dnorm*gamma
+                dvar=((bx-sample_mean)*(sample_var+eps)**(-1.5)*(-0.5)*dz).sum(axis=1).reshape(-1,1)
+                dvardmean = -2 * (bx - sample_mean) / bnum
+                dvardx = 2 * (bx - sample_mean) / bnum
+                dmean = ((-dz * (sample_var + eps) ** (-0.5)) + dvar * dvardmean).sum(axis=1).reshape(-1,1)
+                dmeandx = 1 / bnum
+                tdx = (dz / np.sqrt(sample_var + eps)) + dmean * dmeandx + dvar * dvardx
+                dz = tdx
+
             else:
                 dz=dnorm#(n,hd)
 

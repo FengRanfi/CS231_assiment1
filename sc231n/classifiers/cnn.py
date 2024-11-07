@@ -45,7 +45,7 @@ class ThreeLayerConvNet(object):
         self.params = {}
         self.reg = reg
         self.dtype = dtype
-
+        self.stride=2
         ############################################################################
         # TODO: Initialize weights and biases for the three-layer convolutional    #
         # network. Weights should be initialized from a Gaussian centered at 0.0   #
@@ -60,10 +60,31 @@ class ThreeLayerConvNet(object):
         # and stride of the first convolutional layer are chosen so that           #
         # **the width and height of the input are preserved**. Take a look at      #
         # the start of the loss() function to see how that happens.                #
+        # TODO: 初始化三层卷积网络的权重和偏置。
+        #
+        # bash
+        # 权重应从均值为 0.0、标准差为 weight_scale 的高斯分布中初始化；偏置应初始化为零。
+        # 所有的权重和偏置应存储在字典 self.params 中。
+        # 卷积层的权重和偏置使用键 'W1' 和 'b1' 存储；隐藏全连接层的权重和偏置使用键 'W2' 和 'b2'；
+        # 输出全连接层的权重和偏置使用键 'W3' 和 'b3' 存储。
+        #
+        # 重要提示：对于此作业，你可以假设第一个卷积层的填充和步幅的选择
+        # **确保输入的宽度和高度不变**。查看 loss() 函数的开头，了解这是如何实现的。
         ############################################################################
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-
-        pass
+        self.poolH=2
+        self.poolW=2
+        self.num_filters=num_filters
+        C,H,W=input_dim
+        self.params["W1"]=np.random.normal(0, weight_scale,size=(num_filters,C,filter_size,filter_size))
+        self.HH=((H-self.poolH)//self.stride+1)
+        self.WW=((W-self.poolW)//self.stride+1)
+        poolOutSize=num_filters*self.HH*self.WW
+        self.params["W2"]=np.random.normal(0, weight_scale,size=(poolOutSize,hidden_dim))
+        self.params["W3"]=np.random.normal(0, weight_scale,size=(hidden_dim,num_classes))
+        self.params["b1"]=np.zeros(shape=(num_filters))
+        self.params["b2"]=np.zeros(shape=(hidden_dim))
+        self.params["b3"]=np.zeros(shape=(num_classes))
 
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         ############################################################################
@@ -89,7 +110,7 @@ class ThreeLayerConvNet(object):
         conv_param = {"stride": 1, "pad": (filter_size - 1) // 2}
 
         # pass pool_param to the forward pass for the max-pooling layer
-        pool_param = {"pool_height": 2, "pool_width": 2, "stride": 2}
+        pool_param = {"pool_height": self.poolH, "pool_width": self.poolW, "stride": 2}
 
         scores = None
         ############################################################################
@@ -102,8 +123,16 @@ class ThreeLayerConvNet(object):
         ############################################################################
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-        pass
-
+        conv_relu_pool_out,conv_relu_pool_cache=conv_relu_pool_forward(X,W1,b1,conv_param,pool_param)
+        #print(conv_relu_pool_out.shape)
+        affine_relu_out1,affine_relu_cache1=affine_relu_forward(conv_relu_pool_out,W2,b2)
+        #print(affine_relu_out1.shape)
+        affine_relu_out2=affine_relu_out1.dot(W3)+b3
+        E_out=np.exp(affine_relu_out2)
+        E_out_sum=np.sum(E_out,axis=1).reshape(-1,1)
+        scores=E_out/E_out_sum
+        #print(X.shape,conv_relu_pool_out.shape)
+        #conv - relu - 2x2 max pool - affine - relu - affine - softmax
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         ############################################################################
         #                             END OF YOUR CODE                             #
@@ -113,6 +142,7 @@ class ThreeLayerConvNet(object):
             return scores
 
         loss, grads = 0, {}
+        n=X.shape[0]
         ############################################################################
         # TODO: Implement the backward pass for the three-layer convolutional net, #
         # storing the loss and gradients in the loss and grads variables. Compute  #
@@ -124,9 +154,20 @@ class ThreeLayerConvNet(object):
         # of 0.5 to simplify the expression for the gradient.                      #
         ############################################################################
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-
-        pass
-
+        loss=-np.log(scores[np.arange(n),y]).sum()/n+self.reg*((W1**2).sum()+(W2**2).sum()+(W3**2).sum())/2
+        yOH=np.zeros_like(scores)
+        yOH[np.arange(n),y]=1
+        dlossDaro2=(scores-yOH)/n
+        grads["b3"]=dlossDaro2.sum(axis=0)
+        grads["W3"]=np.transpose(affine_relu_out1).dot(dlossDaro2)
+        #print(affine_relu_out1.shape,dlossDaro2.shape)
+        daro1=dlossDaro2.dot(np.transpose(W3))
+        d_crpo,grads["W2"],grads["b2"]=affine_relu_backward(daro1,affine_relu_cache1)
+        d_crpo=d_crpo.reshape(d_crpo.shape[0],self.num_filters,self.HH,self.WW)
+        dX,grads["W1"],grads["b1"]=conv_relu_pool_backward(d_crpo,conv_relu_pool_cache)
+        grads["W3"] += self.reg * W3
+        grads["W2"] += self.reg * W2
+        grads["W1"] += self.reg * W1
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         ############################################################################
         #                             END OF YOUR CODE                             #
