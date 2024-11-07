@@ -9,4 +9,11 @@ extensions = [
     ),
 ]
 
-setup(ext_modules=cythonize(extensions),)
+setup(
+    ext_modules = cythonize("im2col_cython.pyx")
+)
+
+setup(ext_modules=cythonize(extensions),
+    include_dirs = [numpy.get_include(), "<path_to_python_include>"],
+    library_dirs = ["<path_to_python_lib>"]
+)

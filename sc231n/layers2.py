@@ -927,14 +927,13 @@ def spatial_groupnorm_backward(dout, cache):
     # xn->var xn->mean xn->x
     # var->mean var->x
     # mean->x
-    N2=C//G*H*W
-    doutdxn=dout*gamma
+    doutdxn=(dout*gamma)
     doutdxn=doutdxn.reshape(N,G,C//G,H,W)
     dxndvar=(-doutdxn*(x-mean)*(var+eps)**(-1.5)/2).sum(axis=(2,3,4),keepdims=True)
-    dvardmean=(-2*(x-mean)/N2).sum(axis=(2,3,4),keepdims=True)
-    dvardx=2*(x-mean)/N2
+    dvardmean=-2*(x-mean)/N
+    dvardx=2*(x-mean)/N
     dxndmean=(-doutdxn*(var+eps)**(-0.5)).sum(axis=(2,3,4),keepdims=True)+dxndvar*dvardmean
-    dmeandx=1/N2
+    dmeandx=1/N
     dxndx=doutdxn*(var+eps)**(-0.5)+dxndmean*dmeandx+dxndvar*dvardx
     dx=dxndx.reshape(N, C, H, W)
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
