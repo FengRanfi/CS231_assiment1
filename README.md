@@ -1,4 +1,4 @@
-# CS231_HomeWork
+# <a href="https://cs231n.github.io/">CS231_Assignments_2024(click to get assignments)</a>
 ## cs231课程课后第二章作业
 # main分支不是最终版本，最终版本请看2024_11_7分支
 有问题可以发我邮箱：18736523389@163.com
